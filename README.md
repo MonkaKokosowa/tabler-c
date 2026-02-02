@@ -2,42 +2,42 @@
 A lightweight, bare-metal bus arrival dashboard for Raspberry Pi 4. This project bypasses heavy desktop environments (X11/Wayland) to render real-time transit data directly to the Linux Framebuffer using LVGL and C.
 
 ## Features
-Direct Framebuffer Rendering: No window manager required; runs straight from the TTY.
+- Direct Framebuffer Rendering: No window manager required; runs straight from the TTY.
 
-4x Integer Scaling: Renders at a logical 640x360 and scales to a physical 1440x900 for massive, readable text.
+- 4x Integer Scaling: Renders at a logical 640x360 and scales to a physical 1440x900 for massive, readable text.
 
-Smart Deep Cache: Fetches up to 10 upcoming departures and automatically slides new ones into view as buses depart.
+- Smart Deep Cache: Fetches up to 10 upcoming departures and automatically slides new ones into view as buses depart.
 
-Dynamic Updates:
+- Dynamic Updates:
 
-Clock: Per-second updates (Green).
+    - Clock: Per-second updates (Green).
 
-Timetable: Recalculates "minutes left" every 2 seconds.
+    - Timetable: Recalculates "minutes left" every 2 seconds.
 
-Auto-Refetch: Updates every 2 minutes OR immediately if the list drops below 2 entries.
+    - Auto-Refetch: Updates every 2 minutes OR immediately if the list drops below 2 entries.
 
-Low Resource Usage: Uses <10MB of RAM and minimal CPU.
+    - Low Resource Usage: Uses <10MB of RAM and minimal CPU.
 
 ## Hardware Requirements
-- Raspberry Pi 4 (or similar).
+- Raspberry Pi (or any linux computer)
 
 - Monitor: Optimized for 1440x900 (adjustable in main.c).
 
 - Internet Connection: For fetching real-time MPK API data.
 
 ## Installation
-1. Install Dependencies
+### 1. Install Dependencies
 ```bash
 sudo apt-get update
 sudo apt-get install git gcc make libcurl4-openssl-dev libcjson-dev
 ```
-2. Setup Project
+### 2. Setup Project
 ```bash
 git clone https://github.com/MonkaKokosowa/tabler-c.git
 cd tabler-c
 git clone -b v8.3.10 https://github.com/lvgl/lvgl.git
 ```
-3. System Configuration
+### 3. System Configuration
 To ensure a clean dashboard without kernel text or a blinking cursor:
 
 Edit /boot/cmdline.txt: Append the following to the existing line:
