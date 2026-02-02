@@ -79,8 +79,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/home/monica/mpk_dashboard
-ExecStart=/home/monica/mpk_dashboard/dashboard
+WorkingDirectory=/home/user/tabler-c
+ExecStart=/home/user/tabler-c/dashboard
 Restart=always
 RestartSec=5
 
