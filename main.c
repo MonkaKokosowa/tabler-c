@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/ioctl.h>
@@ -28,6 +29,42 @@ typedef struct {
 
 BusDeparture cached_buses[CACHE_SIZE];
 int is_fetching = 0; 
+
+// Location ID (can be overridden by .env LOCATION_ID)
+char location_id[64] = "00000000-0000-0000-0000-000000000000";
+
+// Trim whitespace in-place (both ends)
+void trim_whitespace(char *s) {
+    char *p = s;
+    while(*p && isspace((unsigned char)*p)) p++;
+    if (p != s) memmove(s, p, strlen(p) + 1);
+    size_t len = strlen(s);
+    while(len > 0 && isspace((unsigned char)s[len-1])) s[--len] = '\0';
+}
+
+// Load LOCATION_ID from .env if present (format: LOCATION_ID=...)
+void load_env_location(void) {
+    FILE *f = fopen(".env", "r");
+    if (!f) return;
+    char line[256];
+    while (fgets(line, sizeof(line), f)) {
+        trim_whitespace(line);
+        if (line[0] == '\0' || line[0] == '#') continue;
+        char *eq = strchr(line, '=');
+        if (!eq) continue;
+        *eq = '\0';
+        char *key = line;
+        char *val = eq + 1;
+        trim_whitespace(key);
+        trim_whitespace(val);
+        if (strcmp(key, "LOCATION_ID") == 0 && val[0] != '\0') {
+            strncpy(location_id, val, sizeof(location_id)-1);
+            location_id[sizeof(location_id)-1] = '\0';
+            break;
+        }
+    }
+    fclose(f);
+}
 
 // --- Framebuffer Driver (3x Scaling) ---
 int fbfd = 0;
@@ -169,8 +206,8 @@ void fetch_mpk_data() {
     time_t t = time(NULL);
     struct tm tm = *localtime(&t);
     char url[256];
-    sprintf(url, "https://live.mpk.czest.pl/api/locations/00000000-0000-0000-0000-000000000000/timetables/%d/%d/%d", 
-            tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
+        sprintf(url, "https://live.mpk.czest.pl/api/locations/%s/timetables/%d/%d/%d", 
+            location_id, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
 
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writefunc);
@@ -221,6 +258,9 @@ void fetch_mpk_data() {
 int main(void) {
     lv_init();
     fbdev_init();
+
+    // Load optional LOCATION_ID from .env (overrides built-in UUID)
+    load_env_location();
 
     static lv_disp_draw_buf_t disp_buf;
     static lv_color_t buf[HOR_RES * 40]; 

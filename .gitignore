@@ -2,6 +2,7 @@
 *.d
 dashboard
 lvgl/
+.env
 
 # Object files
 *.o
