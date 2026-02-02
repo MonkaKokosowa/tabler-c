@@ -1,5 +1,7 @@
 # MPK Częstochowa Pi-Dashboard
-A lightweight, bare-metal bus arrival dashboard for Raspberry Pi 4. This project bypasses heavy desktop environments (X11/Wayland) to render real-time transit data directly to the Linux Framebuffer using LVGL and C.
+A lightweight, bare-metal bus arrival dashboard for Raspberry Pi. This project bypasses heavy desktop environments (X11/Wayland) to render real-time transit data directly to the Linux Framebuffer using LVGL and C.
+
+!["Example"](https://raw.githubusercontent.com/MonkaKokosowa/tabler-c/refs/heads/main/tabler.jpg)
 
 ## Features
 - Direct Framebuffer Rendering: No window manager required; runs straight from the TTY.
