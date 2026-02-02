@@ -1,5 +1,7 @@
 # Prerequisites
 *.d
+dashboard
+lvgl/
 
 # Object files
 *.o
