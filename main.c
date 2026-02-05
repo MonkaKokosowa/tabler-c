@@ -208,6 +208,7 @@ void fetch_mpk_data() {
     char url[256];
         sprintf(url, "https://live.mpk.czest.pl/api/locations/%s/timetables/%d/%d/%d", 
             location_id, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
+    fprintf(stdout, "Fetching data for date: %d-%d-%d from URL: %s\n", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, url);
 
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writefunc);
@@ -238,6 +239,7 @@ void fetch_mpk_data() {
                              cached_buses[collected_count].hour = bt->tm_hour;
                              cached_buses[collected_count].min = bt->tm_min;
                              cached_buses[collected_count].is_valid = 1;
+                             fprintf(stdout, "  Departure time: %s (Parsed: %02d:%02d)\n", dt->valuestring, bt->tm_hour, bt->tm_min);
                              collected_count++;
                          }
                      }
