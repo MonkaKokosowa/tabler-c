@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include "lvgl/lvgl.h"
 #include <unistd.h>
 #include <time.h>
@@ -28,7 +29,7 @@ typedef struct {
 } BusDeparture;
 
 BusDeparture cached_buses[CACHE_SIZE];
-int is_fetching = 0; 
+int is_fetching = 0;
 
 // Location ID (can be overridden by .env LOCATION_ID)
 char location_id[64] = "00000000-0000-0000-0000-000000000000";
@@ -76,17 +77,17 @@ void fbdev_flush(lv_disp_drv_t * drv, const lv_area_t * area, lv_color_t * color
     if(fbp == 0) { lv_disp_flush_ready(drv); return; }
 
     int32_t x, y;
-    int bpp = vinfo.bits_per_pixel / 8; 
+    int bpp = vinfo.bits_per_pixel / 8;
     long int line_len = finfo.line_length;
-    
+
     for(y = area->y1; y <= area->y2; y++) {
         for(x = area->x1; x <= area->x2; x++) {
             lv_color_t pixel_color = *color_p;
             color_p++;
-            
+
             int phys_x = x * 3;
             int phys_y = y * 3;
-            
+
             if (phys_x >= vinfo.xres - 2 || phys_y >= vinfo.yres - 2) continue;
 
             long int base = (phys_x + vinfo.xoffset) * bpp + (phys_y + vinfo.yoffset) * line_len;
@@ -150,7 +151,7 @@ void update_clock() {
 void refresh_bus_ui() {
     if (is_fetching) return;
 
-    char display_buf[2048] = ""; 
+    char display_buf[2048] = "";
     time_t now = time(NULL);
     int displayed_count = 0;
 
@@ -158,9 +159,9 @@ void refresh_bus_ui() {
     for(int i = 0; i < CACHE_SIZE; i++) {
         if (cached_buses[i].is_valid) {
             double diff = difftime(cached_buses[i].timestamp, now);
-            
+
             // Only show if bus is in the future (or just left < 60s ago)
-            if (diff > -60) { 
+            if (diff > -60) {
                 int minutes = (int)(diff / 60);
                 if (minutes < 0) minutes = 0;
 
@@ -168,9 +169,9 @@ void refresh_bus_ui() {
                 sprintf(line, "#FFFF00 %d min# %02d:%02d\n", minutes, cached_buses[i].hour, cached_buses[i].min);
                 strcat(display_buf, line);
                 displayed_count++;
-                
+
                 // Stop after we have filled the screen with 3 items
-                if (displayed_count >= 3) break;
+                if (displayed_count >= 4) break;
             }
         }
     }
@@ -181,13 +182,14 @@ void refresh_bus_ui() {
 
 time_t parse_iso_time(const char* iso_str) {
     struct tm tm = {0};
-    sscanf(iso_str, "%d-%d-%dT%d:%d:%d", 
-           &tm.tm_year, &tm.tm_mon, &tm.tm_mday, 
+    sscanf(iso_str, "%d-%d-%dT%d:%d:%d",
+           &tm.tm_year, &tm.tm_mon, &tm.tm_mday,
            &tm.tm_hour, &tm.tm_min, &tm.tm_sec);
     tm.tm_year -= 1900;
     tm.tm_mon -= 1;
-    tm.tm_isdst = -1; 
-    return mktime(&tm);
+    // The API provides time in UTC. 
+    // timegm() treats the struct tm as UTC, returning the correct epoch time.
+    return timegm(&tm); 
 }
 
 void fetch_mpk_data() {
@@ -202,11 +204,11 @@ void fetch_mpk_data() {
 
     struct string s;
     init_string(&s);
-    
+
     time_t t = time(NULL);
     struct tm tm = *localtime(&t);
     char url[256];
-        sprintf(url, "https://live.mpk.czest.pl/api/locations/%s/timetables/%d/%d/%d", 
+        sprintf(url, "https://live.mpk.czest.pl/api/locations/%s/timetables/%d/%d/%d",
             location_id, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
     fprintf(stdout, "Fetching data for date: %d-%d-%d from URL: %s\n", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, url);
 
@@ -219,19 +221,19 @@ void fetch_mpk_data() {
     if (res == CURLE_OK) {
         cJSON *json = cJSON_Parse(s.ptr);
         if (json) {
-             cJSON *item = cJSON_GetArrayItem(json, 0); 
+             cJSON *item = cJSON_GetArrayItem(json, 0);
              if (item) {
                  cJSON *timetable = cJSON_GetObjectItemCaseSensitive(item, "timetable");
                  time_t now = time(NULL);
                  int collected_count = 0;
                  cJSON *entry = NULL;
-                 
+
                  cJSON_ArrayForEach(entry, timetable) {
                      cJSON *dt = cJSON_GetObjectItemCaseSensitive(entry, "dateTime");
                      if (cJSON_IsString(dt) && (dt->valuestring != NULL)) {
                          time_t bus_time = parse_iso_time(dt->valuestring);
                          double diff = difftime(bus_time, now);
-                         
+
                          // Store future buses in our Deep Cache
                          if (diff > 0) {
                              struct tm *bt = localtime(&bus_time);
@@ -244,15 +246,15 @@ void fetch_mpk_data() {
                          }
                      }
                      // Keep gathering until we have 10 backup buses
-                     if (collected_count >= CACHE_SIZE) break; 
+                     if (collected_count >= CACHE_SIZE) break;
                  }
-             } 
+             }
              cJSON_Delete(json);
         }
-    } 
+    }
     free(s.ptr);
     curl_easy_cleanup(curl);
-    
+
     is_fetching = 0;
     refresh_bus_ui();
 }
@@ -265,7 +267,7 @@ int main(void) {
     load_env_location();
 
     static lv_disp_draw_buf_t disp_buf;
-    static lv_color_t buf[HOR_RES * 40]; 
+    static lv_color_t buf[HOR_RES * 40];
     lv_disp_draw_buf_init(&disp_buf, buf, NULL, HOR_RES * 40);
 
     static lv_disp_drv_t disp_drv;
@@ -285,24 +287,24 @@ int main(void) {
     lv_obj_align(clock_label, LV_ALIGN_TOP_MID, 0, 10);
     lv_obj_set_style_text_font(clock_label, &lv_font_montserrat_48, 0);
     lv_obj_set_style_text_color(clock_label, lv_color_hex(0x00FF00), 0);
-    update_clock(); 
+    update_clock();
 
     // --- Bus List ---
     bus_label = lv_label_create(lv_scr_act());
-    lv_obj_align(bus_label, LV_ALIGN_TOP_MID, 0, 70); 
+    lv_obj_align(bus_label, LV_ALIGN_TOP_MID, 0, 70);
     lv_obj_set_style_text_font(bus_label, &lv_font_montserrat_48, 0);
-    lv_label_set_recolor(bus_label, true); 
+    lv_label_set_recolor(bus_label, true);
     lv_label_set_text(bus_label, "Pobieranie...");
 
     fetch_mpk_data();
 
     uint32_t last_net_update = 0;
     uint32_t last_ui_update = 0;
-    
+
     while(1) {
-        lv_tick_inc(5); 
+        lv_tick_inc(5);
         lv_timer_handler();
-        
+
         update_clock();
         if (lv_tick_get() - last_ui_update > 2000) {
             refresh_bus_ui();
@@ -312,7 +314,7 @@ int main(void) {
             fetch_mpk_data();
             last_net_update = lv_tick_get();
         }
-        usleep(5000); 
+        usleep(5000);
     }
 
     return 0;
