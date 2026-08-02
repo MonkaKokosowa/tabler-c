@@ -28,12 +28,22 @@ typedef struct {
     int is_valid;
 } BusDeparture;
 
+typedef struct {
+    time_t timestamp;
+    float temperature;
+    float rain;
+    int precipitation_probability;
+    float uv_index;
+    float apparent_temperature;
+} WeatherData;
+
+WeatherData cached_weather[24];
 BusDeparture cached_buses[CACHE_SIZE];
 int is_fetching = 0;
 
 // Location ID (can be overridden by .env LOCATION_ID)
 char location_id[64] = "00000000-0000-0000-0000-000000000000";
-
+char open_meteo_url[256] = "https://example.com";
 // Trim whitespace in-place (both ends)
 void trim_whitespace(char *s) {
     char *p = s;
@@ -61,8 +71,15 @@ void load_env_location(void) {
         if (strcmp(key, "LOCATION_ID") == 0 && val[0] != '\0') {
             strncpy(location_id, val, sizeof(location_id)-1);
             location_id[sizeof(location_id)-1] = '\0';
-            break;
+            // break;
         }
+        if (strcmp(key, "OPEN_METEO_URL") == 0 && val[0] != '\0') {
+            fprintf(stderr, "OPEN_METEO_URL: %s\n", val);
+            strncpy(open_meteo_url, val, sizeof(open_meteo_url)-1);
+            open_meteo_url[sizeof(open_meteo_url)-1] = '\0';
+            // break;
+        }
+
     }
     fclose(f);
 }
@@ -113,13 +130,44 @@ void fbdev_flush(lv_disp_drv_t * drv, const lv_area_t * area, lv_color_t * color
     lv_disp_flush_ready(drv);
 }
 
-void fbdev_init(void) {
-    fbfd = open("/dev/fb0", O_RDWR);
-    if (fbfd == -1) { perror("Error: cannot open framebuffer"); return; }
-    if (ioctl(fbfd, FBIOGET_FSCREENINFO, &finfo) == -1) return;
-    if (ioctl(fbfd, FBIOGET_VSCREENINFO, &vinfo) == -1) return;
-    long int screensize = vinfo.xres * vinfo.yres * vinfo.bits_per_pixel / 8;
+void fbdev_init(int use_file) {
+    long int screensize;
+
+    if (use_file) {
+        // Run in file mode for 'fbe' compatibility
+        fbfd = open("/tmp/fbe_buffer", O_RDWR | O_CREAT, 0666);
+        if (fbfd == -1) { perror("Error: cannot open /tmp/fbe_buffer"); return; }
+
+        // Mock the values that ioctl() would normally retrieve
+        vinfo.xres = HOR_RES * 3;
+        vinfo.yres = VER_RES * 3;
+        vinfo.bits_per_pixel = sizeof(lv_color_t) * 8;
+        vinfo.xoffset = 0;
+        vinfo.yoffset = 0;
+        finfo.line_length = vinfo.xres * vinfo.bits_per_pixel / 8;
+
+        screensize = vinfo.xres * vinfo.yres * vinfo.bits_per_pixel / 8;
+
+        // Ensure the file is the proper size for mmap
+        if (ftruncate(fbfd, screensize) == -1) {
+            perror("Error: could not resize /tmp/fbe_buffer");
+            return;
+        }
+    } else {
+        // Standard hardware framebuffer setup
+        fbfd = open("/dev/fb0", O_RDWR);
+        if (fbfd == -1) { perror("Error: cannot open framebuffer"); return; }
+        if (ioctl(fbfd, FBIOGET_FSCREENINFO, &finfo) == -1) { perror("Error reading fixed information"); return; }
+        if (ioctl(fbfd, FBIOGET_VSCREENINFO, &vinfo) == -1) { perror("Error reading variable information"); return; }
+
+        screensize = vinfo.xres * vinfo.yres * vinfo.bits_per_pixel / 8;
+    }
+
     fbp = (char *)mmap(0, screensize, PROT_READ | PROT_WRITE, MAP_SHARED, fbfd, 0);
+    if (fbp == (char *)-1) {
+        perror("Error: failed to map framebuffer device to memory");
+        fbp = 0;
+    }
 }
 
 // --- Network & Parsing ---
@@ -136,6 +184,7 @@ size_t writefunc(void *ptr, size_t size, size_t nmemb, struct string *s) {
 
 lv_obj_t *clock_label;
 lv_obj_t *bus_label;
+lv_obj_t *weather_label;
 
 void update_clock() {
     time_t now;
@@ -145,6 +194,43 @@ void update_clock() {
     timeinfo = localtime(&now);
     strftime(buffer, 32, "%H:%M:%S", timeinfo);
     lv_label_set_text(clock_label, buffer);
+}
+
+// --- NEW LOGIC: Scan all 24 times, display top 3 valid ---
+void refresh_weather_ui() {
+    if (is_fetching) return;
+
+    char display_buf[2048] = "";
+    time_t now = time(NULL);
+    int displayed_count = 0;
+
+    // Iterate through ALL cached weather (up to 24)
+    for(int i = 0; i < 24; i++) {
+
+            double diff = difftime(cached_weather[i].timestamp, now);
+
+            // Only show if weather is in the future
+            if (diff > -3600) {
+                int minutes = (int)(diff / 60);
+                if (minutes < 0) minutes = 0;
+
+                char line[64];
+                sprintf(line, "#FFFF00 %.1fC##00CCFF %d%% ## %02d\n",
+                    cached_weather[i].temperature,
+                    cached_weather[i].precipitation_probability,
+                    localtime(&cached_weather[i].timestamp)->tm_hour,
+                    localtime(&cached_weather[i].timestamp)->tm_min);
+                strcat(display_buf, line);
+                displayed_count++;
+
+                // Stop after we have filled the screen with 3 items
+                if (displayed_count >= 10) break;
+            }
+
+    }
+
+    if (displayed_count == 0) lv_label_set_text(weather_label, "Brak pogody.");
+    else lv_label_set_text(weather_label, display_buf);
 }
 
 // --- NEW LOGIC: Scan all 10 buses, display top 3 valid ---
@@ -171,7 +257,7 @@ void refresh_bus_ui() {
                 displayed_count++;
 
                 // Stop after we have filled the screen with 3 items
-                if (displayed_count >= 4) break;
+                if (displayed_count >= 5) break;
             }
         }
     }
@@ -187,11 +273,138 @@ time_t parse_iso_time(const char* iso_str) {
            &tm.tm_hour, &tm.tm_min, &tm.tm_sec);
     tm.tm_year -= 1900;
     tm.tm_mon -= 1;
-    // The API provides time in UTC. 
+    // The API provides time in UTC.
     // timegm() treats the struct tm as UTC, returning the correct epoch time.
-    return timegm(&tm); 
+    return timegm(&tm);
 }
 
+void fetch_weather_data() {
+    is_fetching = 1;
+
+    if (open_meteo_url[0] == '\0') {
+        is_fetching = 0;
+        return;
+    }
+
+    CURL *curl;
+    CURLcode res;
+    curl = curl_easy_init();
+    if (!curl) { is_fetching = 0; return; }
+
+    struct string s;
+    init_string(&s);
+
+    time_t t = time(NULL);
+    struct tm tm = *localtime(&t);
+
+    char url[256];
+    sprintf(url, "%s", open_meteo_url);
+
+    fprintf(stdout, "Fetching weather data from URL: %s\n", url);
+
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writefunc);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &s);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
+    res = curl_easy_perform(curl);
+
+    if (res == CURLE_OK) {
+        cJSON *json = cJSON_Parse(s.ptr);
+        if (json) {
+            cJSON *hourly = cJSON_GetObjectItemCaseSensitive(json, "hourly");
+            if (hourly) {
+                // time
+                cJSON *time = cJSON_GetObjectItemCaseSensitive(hourly, "time");
+                if (time) {
+                    int collected_count = 0;
+                    cJSON *entry = NULL;
+                    cJSON_ArrayForEach(entry, time) {
+                        if (cJSON_IsString(entry) && (entry->valuestring != NULL)) {
+                            time_t weather_time = parse_iso_time(entry->valuestring);
+                            cached_weather[collected_count].timestamp = weather_time;
+                            collected_count++;
+                        }
+                        if (collected_count >= 24) break;
+                    }
+                }
+                // temperature_2m
+                cJSON *temperature_2m = cJSON_GetObjectItemCaseSensitive(hourly, "temperature_2m");
+                if (temperature_2m) {
+                    int collected_count = 0;
+                    cJSON *entry = NULL;
+                    cJSON_ArrayForEach(entry, temperature_2m) {
+                        if (cJSON_IsNumber(entry)) {
+                            cached_weather[collected_count].temperature = entry->valuedouble;
+                            collected_count++;
+                        }
+                        if (collected_count >= 24) break;
+                    }
+                }
+                // rain
+                cJSON *rain = cJSON_GetObjectItemCaseSensitive(hourly, "rain");
+                if (rain) {
+                    int collected_count = 0;
+                    cJSON *entry = NULL;
+                    cJSON_ArrayForEach(entry, rain) {
+                        if (cJSON_IsNumber(entry)) {
+                            cached_weather[collected_count].rain = entry->valuedouble;
+                            collected_count++;
+                        }
+                        if (collected_count >= 24) break;
+                    }
+                }
+                // precipitation_probability
+                cJSON *precipitation_probability = cJSON_GetObjectItemCaseSensitive(hourly, "precipitation_probability");
+                if (precipitation_probability) {
+                    int collected_count = 0;
+                    cJSON *entry = NULL;
+                    cJSON_ArrayForEach(entry, precipitation_probability) {
+                        if (cJSON_IsNumber(entry)) {
+                            cached_weather[collected_count].precipitation_probability = entry->valueint;
+                            collected_count++;
+                        }
+                        if (collected_count >= 24) break;
+                    }
+                }
+                // uv_index
+                cJSON *uv_index = cJSON_GetObjectItemCaseSensitive(hourly, "uv_index");
+                if (uv_index) {
+                    int collected_count = 0;
+                    cJSON *entry = NULL;
+                    cJSON_ArrayForEach(entry, uv_index) {
+                        if (cJSON_IsNumber(entry)) {
+                            cached_weather[collected_count].uv_index = entry->valuedouble;
+                            collected_count++;
+                        }
+                        if (collected_count >= 24) break;
+                    }
+                }
+                // apparent_temperature
+                cJSON *apparent_temperature = cJSON_GetObjectItemCaseSensitive(hourly, "apparent_temperature");
+                if (apparent_temperature) {
+                    int collected_count = 0;
+                    cJSON *entry = NULL;
+                    cJSON_ArrayForEach(entry, apparent_temperature) {
+                        if (cJSON_IsNumber(entry)) {
+                            cached_weather[collected_count].apparent_temperature = entry->valuedouble;
+                            collected_count++;
+                        }
+                        if (collected_count >= 24) break;
+                    }
+                }
+
+
+            }
+             cJSON_Delete(json);
+        }
+    }
+    free(s.ptr);
+    curl_easy_cleanup(curl);
+
+    is_fetching = 0;
+    refresh_weather_ui();
+
+}
 void fetch_mpk_data() {
     is_fetching = 1;
     // Clear old cache
@@ -259,9 +472,20 @@ void fetch_mpk_data() {
     refresh_bus_ui();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+
+    int use_file = 0;
+
+    // Parse command line arguments for the '-d' flag
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-d") == 0) {
+            use_file = 1;
+            break;
+        }
+    }
+
     lv_init();
-    fbdev_init();
+    fbdev_init(use_file);
 
     // Load optional LOCATION_ID from .env (overrides built-in UUID)
     load_env_location();
@@ -285,18 +509,26 @@ int main(void) {
     // --- Clock ---
     clock_label = lv_label_create(lv_scr_act());
     lv_obj_align(clock_label, LV_ALIGN_TOP_MID, 0, 10);
-    lv_obj_set_style_text_font(clock_label, &lv_font_montserrat_48, 0);
+    lv_obj_set_style_text_font(clock_label, &lv_font_montserrat_36, 0);
     lv_obj_set_style_text_color(clock_label, lv_color_hex(0x00FF00), 0);
     update_clock();
 
     // --- Bus List ---
     bus_label = lv_label_create(lv_scr_act());
-    lv_obj_align(bus_label, LV_ALIGN_TOP_MID, 0, 70);
-    lv_obj_set_style_text_font(bus_label, &lv_font_montserrat_48, 0);
+    lv_obj_align(bus_label, LV_ALIGN_TOP_MID, -120, 70);
+    lv_obj_set_style_text_font(bus_label, &lv_font_montserrat_36, 0);
     lv_label_set_recolor(bus_label, true);
     lv_label_set_text(bus_label, "Pobieranie...");
 
+    // --- Weather List ---
+    weather_label = lv_label_create(lv_scr_act());
+    lv_obj_align(weather_label, LV_ALIGN_TOP_MID, 120, 70);
+    lv_obj_set_style_text_font(weather_label, &lv_font_montserrat_18, 0);
+    lv_label_set_recolor(weather_label, true);
+    lv_label_set_text(weather_label, "Pobieranie...");
+
     fetch_mpk_data();
+    fetch_weather_data();
 
     uint32_t last_net_update = 0;
     uint32_t last_ui_update = 0;
@@ -308,10 +540,12 @@ int main(void) {
         update_clock();
         if (lv_tick_get() - last_ui_update > 2000) {
             refresh_bus_ui();
+            refresh_weather_ui();
             last_ui_update = lv_tick_get();
         }
         if (lv_tick_get() - last_net_update > 120000) {
             fetch_mpk_data();
+            fetch_weather_data();
             last_net_update = lv_tick_get();
         }
         usleep(5000);
