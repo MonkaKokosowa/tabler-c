@@ -4,28 +4,17 @@ A lightweight, bare-metal bus arrival dashboard for Raspberry Pi. This project b
 !["Example"](https://raw.githubusercontent.com/MonkaKokosowa/tabler-c/refs/heads/main/tabler.jpg)
 
 ## Features
-- Direct Framebuffer Rendering: No window manager required; runs straight from the TTY.
-
-- 4x Integer Scaling: Renders at a logical 640x360 and scales to a physical 1440x900 for massive, readable text.
-
-- Smart Deep Cache: Fetches up to 10 upcoming departures and automatically slides new ones into view as buses depart.
-
-- Dynamic Updates:
-
-    - Clock: Per-second updates (Green).
-
-    - Timetable: Recalculates "minutes left" every 2 seconds.
-
-    - Auto-Refetch: Updates every 2 minutes OR immediately if the list drops below 2 entries.
-
-    - Low Resource Usage: Uses <10MB of RAM and minimal CPU.
+- Direct framebuffer rendering, no window manager, runs straight from the TTY
+- Renders natively at 1440x900, no upscaling blur
+- Pulls upcoming departures and slides new ones in as buses leave
+- Clock updates every second, timetable recalculates "minutes left" every 2s
+- Refetches from the API every 2 minutes
+- Low resource usage, fine on a Pi
 
 ## Hardware Requirements
 - Raspberry Pi (or any linux computer)
-
-- Monitor: Optimized for 1440x900 (adjustable in main.c).
-
-- Internet Connection: For fetching real-time MPK API data.
+- A display, tuned for 1440x900 (change HOR_RES/VER_RES in main.c for other resolutions)
+- Internet connection for the MPK API
 
 ## Installation
 ### 1. Install Dependencies
@@ -92,12 +81,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable mpk.service
 ```
 ## Technical Architecture
-The project uses Pixel Tripling/Quadrupling to overcome the memory limitations of scaling fonts in software on embedded hardware.
-
-- LVGL (Light and Versatile Graphics Library): Handles the UI logic and text rendering.
-
-- libcurl: Handles synchronous API requests to the Częstochowa Live MPK API.
-
-- cJSON: Parses the transit timetable.
-
-- mmap: Maps /dev/fb0 into memory for fast pixel manipulation.
+- LVGL handles the UI and text rendering
+- libcurl does the (synchronous) API requests to the Częstochowa Live MPK API
+- cJSON parses the timetable/weather responses
+- mmap maps /dev/fb0 for direct pixel writes
