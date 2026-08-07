@@ -14,11 +14,9 @@
 #include <curl/curl.h>
 #include <cjson/cJSON.h>
 
-// LOGICAL RESOLUTION (3x Scaling: 480x300 -> 1440x900 Framebuffer)
-#define HOR_RES 480
-#define VER_RES 300
+#define HOR_RES 1440
+#define VER_RES 900
 
-// --- Data Structures ---
 #define MAX_LOCATIONS 4096
 #define MAX_LINES 128
 #define MAX_VEHICLES 512
@@ -69,7 +67,6 @@ typedef struct {
     int is_valid;
 } WeatherItem;
 
-// --- Unified Global Data Structure ---
 typedef struct {
     LocationConfig config;
 
@@ -95,7 +92,7 @@ typedef struct {
 
 static AppState app_state;
 
-// Convert Polish / non-ASCII characters to standard ASCII for LVGL Montserrat font
+// montserrat doesn't have polish diacritics, so strip them down to plain ascii
 void sanitize_ascii(char *s) {
     if (!s) return;
     char *read = s;
@@ -138,7 +135,6 @@ void trim_whitespace(char *s) {
 }
 
 void load_env_location(void) {
-    // Default fallback values
     strcpy(app_state.config.location_id, "00000000-0000-0000-0000-000000000000");
     strcpy(app_state.config.open_meteo_url, "https://api.open-meteo.com/v1/forecast?latitude=0.0&longitude=0.0&hourly=temperature_2m,rain,precipitation_probability,uv_index,apparent_temperature&timezone=UTC&forecast_days=1");
     strcpy(app_state.config.current_stop_name, "Pobieranie nazwy przystanku...");
@@ -208,7 +204,6 @@ time_t parse_iso_time(const char* iso_str) {
     return timegm(&tm);
 }
 
-// --- Framebuffer Driver (3x Scaling) ---
 int fbfd = 0;
 struct fb_var_screeninfo vinfo;
 struct fb_fix_screeninfo finfo;
@@ -217,39 +212,18 @@ char *fbp = 0;
 void fbdev_flush(lv_disp_drv_t * drv, const lv_area_t * area, lv_color_t * color_p) {
     if(fbp == 0) { lv_disp_flush_ready(drv); return; }
 
-    int32_t x, y;
+    int32_t y;
     int bpp = vinfo.bits_per_pixel / 8;
     long int line_len = finfo.line_length;
 
-    for(y = area->y1; y <= area->y2; y++) {
-        for(x = area->x1; x <= area->x2; x++) {
-            lv_color_t pixel_color = *color_p;
-            color_p++;
+    int32_t x2 = (area->x2 >= vinfo.xres) ? vinfo.xres - 1 : area->x2;
+    int32_t y2 = (area->y2 >= vinfo.yres) ? vinfo.yres - 1 : area->y2;
+    int32_t row_pixels = x2 - area->x1 + 1;
 
-            int phys_x = x * 3;
-            int phys_y = y * 3;
-
-            if (phys_x >= vinfo.xres - 2 || phys_y >= vinfo.yres - 2) continue;
-
-            long int base = (phys_x + vinfo.xoffset) * bpp + (phys_y + vinfo.yoffset) * line_len;
-
-            // Row 1
-            memcpy(fbp + base,                 &pixel_color, bpp);
-            memcpy(fbp + base + bpp,           &pixel_color, bpp);
-            memcpy(fbp + base + 2*bpp,         &pixel_color, bpp);
-
-            // Row 2
-            long int r2 = base + line_len;
-            memcpy(fbp + r2,                   &pixel_color, bpp);
-            memcpy(fbp + r2 + bpp,             &pixel_color, bpp);
-            memcpy(fbp + r2 + 2*bpp,           &pixel_color, bpp);
-
-            // Row 3
-            long int r3 = base + 2*line_len;
-            memcpy(fbp + r3,                   &pixel_color, bpp);
-            memcpy(fbp + r3 + bpp,             &pixel_color, bpp);
-            memcpy(fbp + r3 + 2*bpp,           &pixel_color, bpp);
-        }
+    for(y = area->y1; y <= y2; y++) {
+        long int base = (area->x1 + vinfo.xoffset) * bpp + (y + vinfo.yoffset) * line_len;
+        memcpy(fbp + base, color_p, row_pixels * bpp);
+        color_p += (area->x2 - area->x1 + 1);
     }
     lv_disp_flush_ready(drv);
 }
@@ -261,8 +235,8 @@ void fbdev_init(int use_file) {
         fbfd = open("/tmp/fbe_buffer", O_RDWR | O_CREAT, 0666);
         if (fbfd == -1) { perror("Error: cannot open /tmp/fbe_buffer"); return; }
 
-        vinfo.xres = HOR_RES * 3;
-        vinfo.yres = VER_RES * 3;
+        vinfo.xres = HOR_RES;
+        vinfo.yres = VER_RES;
         vinfo.bits_per_pixel = sizeof(lv_color_t) * 8;
         vinfo.xoffset = 0;
         vinfo.yoffset = 0;
@@ -289,7 +263,6 @@ void fbdev_init(int use_file) {
     }
 }
 
-// --- Network & Data Fetching ---
 struct string { char *ptr; size_t len; };
 void init_string(struct string *s) { s->len = 0; s->ptr = malloc(s->len + 1); s->ptr[0] = '\0'; }
 size_t writefunc(void *ptr, size_t size, size_t nmemb, struct string *s) {
@@ -301,7 +274,6 @@ size_t writefunc(void *ptr, size_t size, size_t nmemb, struct string *s) {
     return size * nmemb;
 }
 
-// 1. Fetch Locations
 void fetch_locations() {
     CURL *curl = curl_easy_init();
     if (!curl) return;
@@ -350,7 +322,6 @@ void fetch_locations() {
     curl_easy_cleanup(curl);
 }
 
-// 2. Fetch Lines
 void fetch_lines() {
     CURL *curl = curl_easy_init();
     if (!curl) return;
@@ -385,7 +356,6 @@ void fetch_lines() {
     curl_easy_cleanup(curl);
 }
 
-// 3. Fetch Vehicles & Database
 void fetch_vehicles() {
     CURL *curl = curl_easy_init();
     if (!curl) return;
@@ -449,7 +419,6 @@ void fetch_vehicles() {
     curl_easy_cleanup(curl);
 }
 
-// 4. Fetch Timetable Departures
 void fetch_timetable_data() {
     app_state.is_fetching = 1;
     app_state.departures_count = 0;
@@ -543,7 +512,6 @@ void fetch_timetable_data() {
     app_state.is_fetching = 0;
 }
 
-// 5. Fetch Weather
 void fetch_weather_data() {
     if (app_state.config.open_meteo_url[0] == '\0') return;
 
@@ -614,7 +582,6 @@ void fetch_weather_data() {
     curl_easy_cleanup(curl);
 }
 
-// Combined API Refresher
 void refresh_all_api_data() {
     fetch_locations();
     fetch_lines();
@@ -623,7 +590,6 @@ void refresh_all_api_data() {
     fetch_weather_data();
 }
 
-// --- UI Objects & Controller ---
 static lv_obj_t *header_cont;
 static lv_obj_t *logo_obj;
 static lv_obj_t *brand_label;
@@ -663,10 +629,8 @@ void render_ui_screen() {
     time_t now = time(NULL);
 
     if (app_state.current_screen == 0) {
-        // --- SCREEN 0: TIMETABLE DEPARTURES ---
         lv_label_set_text(screen_badge_label, "[ Odjazdy 1/2 ]");
 
-        // Banner stop name & next departure
         lv_label_set_text(stop_name_label, app_state.config.current_stop_name);
 
         if (app_state.departures_count > 0 && app_state.departures[0].is_valid) {
@@ -679,7 +643,6 @@ void render_ui_screen() {
             lv_label_set_text(next_dep_label, "Brak najblizszych kursow");
         }
 
-        // Render 4 Departure Cards (Clean non-recolored text layout for perfect spacing)
         int displayed = 0;
         for (int i = 0; i < app_state.departures_count && displayed < 4; i++) {
             if (app_state.departures[i].is_valid) {
@@ -716,13 +679,11 @@ void render_ui_screen() {
             }
         }
     } else {
-        // --- SCREEN 1: WEATHER FORECAST ---
         lv_label_set_text(screen_badge_label, "[ Pogoda 2/2 ]");
 
         lv_label_set_text(next_dep_label, "PROGNOZA POGODY");
         lv_label_set_text(stop_name_label, "Czestochowa Centrum");
 
-        // Display up to 4 Weather Cards
         int displayed = 0;
         for (int i = 0; i < app_state.weather_count && displayed < 4; i++) {
             double diff = difftime(app_state.weather[i].timestamp, now);
@@ -762,72 +723,63 @@ void init_ui() {
     lv_obj_t *scr = lv_scr_act();
     lv_obj_set_style_bg_color(scr, lv_color_hex(0xc8d7e3), LV_PART_MAIN);
 
-    // --- 1. Top Header Container ---
     header_cont = lv_obj_create(scr);
-    lv_obj_set_size(header_cont, 480, 46);
+    lv_obj_set_size(header_cont, 1440, 138);
     lv_obj_set_pos(header_cont, 0, 0);
     lv_obj_set_style_bg_color(header_cont, lv_color_hex(0x233342), LV_PART_MAIN);
     lv_obj_set_style_border_color(header_cont, lv_color_hex(0x17232e), LV_PART_MAIN);
-    lv_obj_set_style_border_width(header_cont, 2, LV_PART_MAIN);
+    lv_obj_set_style_border_width(header_cont, 6, LV_PART_MAIN);
     lv_obj_set_style_radius(header_cont, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(header_cont, 4, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(header_cont, 12, LV_PART_MAIN);
     lv_obj_clear_flag(header_cont, LV_OBJ_FLAG_SCROLLABLE);
 
-    // MPK Logo
     logo_obj = lv_img_create(header_cont);
     lv_img_set_src(logo_obj, &logo_img);
-    lv_obj_align(logo_obj, LV_ALIGN_LEFT_MID, 4, 0);
+    lv_obj_align(logo_obj, LV_ALIGN_LEFT_MID, 12, 0);
 
-    // Brand Label next to logo
     brand_label = lv_label_create(header_cont);
     lv_label_set_text(brand_label, "MPK");
     lv_obj_set_style_text_color(brand_label, lv_color_hex(0xffffff), 0);
-    lv_obj_set_style_text_font(brand_label, &lv_font_montserrat_14, 0);
-    lv_obj_align(brand_label, LV_ALIGN_LEFT_MID, 80, 0);
+    lv_obj_set_style_text_font(brand_label, &lv_font_montserrat_42, 0);
+    lv_obj_align(brand_label, LV_ALIGN_LEFT_MID, 240, 0);
 
-    // Clock Label (Cyan/Light Blue)
     clock_label = lv_label_create(header_cont);
     lv_obj_set_style_text_color(clock_label, lv_color_hex(0x5adbff), 0);
-    lv_obj_set_style_text_font(clock_label, &lv_font_montserrat_22, 0);
-    lv_obj_align(clock_label, LV_ALIGN_RIGHT_MID, -6, -8);
+    lv_obj_set_style_text_font(clock_label, &lv_font_montserrat_48, 0);
+    lv_obj_align(clock_label, LV_ALIGN_RIGHT_MID, -18, -28);
 
-    // Date Label
     date_label = lv_label_create(header_cont);
     lv_obj_set_style_text_color(date_label, lv_color_hex(0x9ebfd8), 0);
-    lv_obj_set_style_text_font(date_label, &lv_font_montserrat_14, 0);
-    lv_obj_align(date_label, LV_ALIGN_RIGHT_MID, -6, 12);
+    lv_obj_set_style_text_font(date_label, &lv_font_montserrat_28, 0);
+    lv_obj_align(date_label, LV_ALIGN_RIGHT_MID, -18, 34);
 
     update_clock_and_date();
 
-    // --- 2. Stop Banner Container (Clean dark blue box) ---
     stop_banner = lv_obj_create(scr);
-    lv_obj_set_size(stop_banner, 468, 54);
-    lv_obj_set_pos(stop_banner, 6, 48);
+    lv_obj_set_size(stop_banner, 1404, 162);
+    lv_obj_set_pos(stop_banner, 18, 144);
     lv_obj_set_style_bg_color(stop_banner, lv_color_hex(0x354859), LV_PART_MAIN);
     lv_obj_set_style_border_color(stop_banner, lv_color_hex(0x22313f), LV_PART_MAIN);
-    lv_obj_set_style_border_width(stop_banner, 1, LV_PART_MAIN);
-    lv_obj_set_style_radius(stop_banner, 4, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(stop_banner, 4, LV_PART_MAIN);
+    lv_obj_set_style_border_width(stop_banner, 3, LV_PART_MAIN);
+    lv_obj_set_style_radius(stop_banner, 12, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(stop_banner, 12, LV_PART_MAIN);
     lv_obj_clear_flag(stop_banner, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Next Departure Line & Direction
     next_dep_label = lv_label_create(stop_banner);
     lv_label_set_text(next_dep_label, "Pobieranie...");
     lv_obj_set_style_text_color(next_dep_label, lv_color_hex(0xffffff), 0);
-    lv_obj_set_style_text_font(next_dep_label, &lv_font_montserrat_18, 0);
-    lv_obj_set_pos(next_dep_label, 6, 2);
+    lv_obj_set_style_text_font(next_dep_label, &lv_font_montserrat_48, 0);
+    lv_obj_set_pos(next_dep_label, 18, 6);
 
-    // Stop Name Text
     stop_name_label = lv_label_create(stop_banner);
     lv_label_set_text(stop_name_label, app_state.config.current_stop_name);
     lv_obj_set_style_text_color(stop_name_label, lv_color_hex(0x5adbff), 0);
-    lv_obj_set_style_text_font(stop_name_label, &lv_font_montserrat_18, 0);
-    lv_obj_set_pos(stop_name_label, 6, 24);
+    lv_obj_set_style_text_font(stop_name_label, &lv_font_montserrat_48, 0);
+    lv_obj_set_pos(stop_name_label, 18, 72);
 
-    // --- 3. Departure Cards Container (4 Rows) ---
     cards_cont = lv_obj_create(scr);
-    lv_obj_set_size(cards_cont, 468, 166);
-    lv_obj_set_pos(cards_cont, 6, 104);
+    lv_obj_set_size(cards_cont, 1404, 498);
+    lv_obj_set_pos(cards_cont, 18, 312);
     lv_obj_set_style_bg_color(cards_cont, lv_color_hex(0xc8d7e3), LV_PART_MAIN);
     lv_obj_set_style_border_width(cards_cont, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(cards_cont, 0, LV_PART_MAIN);
@@ -835,44 +787,43 @@ void init_ui() {
 
     for (int i = 0; i < 4; i++) {
         card_btn[i] = lv_btn_create(cards_cont);
-        lv_obj_set_size(card_btn[i], 468, 38);
-        lv_obj_set_pos(card_btn[i], 0, i * 40);
+        lv_obj_set_size(card_btn[i], 1404, 114);
+        lv_obj_set_pos(card_btn[i], 0, i * 120);
 
         lv_obj_set_style_bg_color(card_btn[i], lv_color_hex(0xc4daed), LV_PART_MAIN);
         lv_obj_set_style_border_color(card_btn[i], lv_color_hex(0xbd472a), LV_PART_MAIN);
-        lv_obj_set_style_border_width(card_btn[i], 2, LV_PART_MAIN);
-        lv_obj_set_style_radius(card_btn[i], 4, LV_PART_MAIN);
-        lv_obj_set_style_pad_all(card_btn[i], 2, LV_PART_MAIN);
+        lv_obj_set_style_border_width(card_btn[i], 6, LV_PART_MAIN);
+        lv_obj_set_style_radius(card_btn[i], 12, LV_PART_MAIN);
+        lv_obj_set_style_pad_all(card_btn[i], 6, LV_PART_MAIN);
 
         card_label[i] = lv_label_create(card_btn[i]);
         lv_label_set_recolor(card_label[i], false);
-        lv_obj_set_style_text_font(card_label[i], &lv_font_montserrat_16, 0);
+        lv_obj_set_style_text_font(card_label[i], &lv_font_montserrat_48, 0);
         lv_obj_set_style_text_color(card_label[i], lv_color_hex(0x0a1c2a), 0);
-        lv_obj_align(card_label[i], LV_ALIGN_LEFT_MID, 6, 0);
+        lv_obj_align(card_label[i], LV_ALIGN_LEFT_MID, 18, 0);
         lv_label_set_text(card_label[i], "Pobieranie...");
     }
 
-    // --- 4. Footer Container ---
     footer_cont = lv_obj_create(scr);
-    lv_obj_set_size(footer_cont, 480, 26);
-    lv_obj_set_pos(footer_cont, 0, 274);
+    lv_obj_set_size(footer_cont, 1440, 78);
+    lv_obj_set_pos(footer_cont, 0, 822);
     lv_obj_set_style_bg_color(footer_cont, lv_color_hex(0x1d2936), LV_PART_MAIN);
     lv_obj_set_style_border_width(footer_cont, 0, LV_PART_MAIN);
     lv_obj_set_style_radius(footer_cont, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(footer_cont, 2, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(footer_cont, 6, LV_PART_MAIN);
     lv_obj_clear_flag(footer_cont, LV_OBJ_FLAG_SCROLLABLE);
 
     footer_label = lv_label_create(footer_cont);
     lv_label_set_text(footer_label, "Fundusze Europejskie  |  Slaskie. Pozytywna energia");
     lv_obj_set_style_text_color(footer_label, lv_color_hex(0x7692a8), 0);
-    lv_obj_set_style_text_font(footer_label, &lv_font_montserrat_12, 0);
-    lv_obj_align(footer_label, LV_ALIGN_LEFT_MID, 4, 0);
+    lv_obj_set_style_text_font(footer_label, &lv_font_montserrat_36, 0);
+    lv_obj_align(footer_label, LV_ALIGN_LEFT_MID, 12, 0);
 
     screen_badge_label = lv_label_create(footer_cont);
     lv_label_set_text(screen_badge_label, "[ Odjazdy 1/2 ]");
     lv_obj_set_style_text_color(screen_badge_label, lv_color_hex(0x5adbff), 0);
-    lv_obj_set_style_text_font(screen_badge_label, &lv_font_montserrat_12, 0);
-    lv_obj_align(screen_badge_label, LV_ALIGN_RIGHT_MID, -4, 0);
+    lv_obj_set_style_text_font(screen_badge_label, &lv_font_montserrat_36, 0);
+    lv_obj_align(screen_badge_label, LV_ALIGN_RIGHT_MID, -12, 0);
 }
 
 int main(int argc, char **argv) {
