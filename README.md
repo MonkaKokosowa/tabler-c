@@ -3,6 +3,8 @@ A lightweight, bare-metal bus arrival dashboard for Raspberry Pi. This project b
 
 !["Example"](https://raw.githubusercontent.com/MonkaKokosowa/tabler-c/refs/heads/main/tabler.jpg)
 
+!["ExampleSS"](https://raw.githubusercontent.com/MonkaKokosowa/tabler-c/refs/heads/main/tabler2.png)
+
 ## Features
 - Direct framebuffer rendering, no window manager, runs straight from the TTY
 - Renders natively at 1440x900, no upscaling blur
